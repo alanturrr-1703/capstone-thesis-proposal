@@ -132,7 +132,7 @@ PR trees assume point data. PM trees subdivide cells **only where a polygon or l
 
 <DemoIframe demo="quadtree-demo.html" height="340px" />
 
-<div class="text-xs opacity-60 mt-1">Interactive: draw a road — watch recursive quadrant subdivision</div>
+<div class="text-xs opacity-60 mt-1">Interactive: tap or drag to draw a road — watch recursive quadrant subdivision</div>
 
 </div>
 

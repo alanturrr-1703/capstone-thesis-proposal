@@ -28,6 +28,7 @@
       border-radius: 6px;
       cursor: crosshair;
       background: #161b22;
+      touch-action: none;
     }
     footer {
       display: flex;
@@ -56,7 +57,7 @@
   </header>
   <canvas id="canvas" width="560" height="280"></canvas>
   <footer>
-    <span>Click &amp; drag to insert continuous geometry</span>
+    <span>Tap &amp; drag (or click &amp; drag) to draw a road</span>
     <button id="reset">Reset</button>
   </footer>
 
@@ -181,27 +182,41 @@
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
+      let clientX, clientY;
+      if (e.touches && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else if (e.changedTouches && e.changedTouches.length > 0) {
+        clientX = e.changedTouches[0].clientX;
+        clientY = e.changedTouches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
       return {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
       };
     }
 
-    canvas.addEventListener('mousedown', (e) => {
+    function beginDraw(e) {
+      if (e.cancelable) e.preventDefault();
       startPt = getPos(e);
       currentPt = startPt;
       drawing = true;
       render();
-    });
+    }
 
-    canvas.addEventListener('mousemove', (e) => {
+    function updateDraw(e) {
       if (!drawing) return;
+      if (e.cancelable) e.preventDefault();
       currentPt = getPos(e);
       render();
-    });
+    }
 
-    canvas.addEventListener('mouseup', (e) => {
+    function endDraw(e) {
       if (!drawing) return;
+      if (e.cancelable) e.preventDefault();
       const end = getPos(e);
       const dist = Math.hypot(end.x - startPt.x, end.y - startPt.y);
       if (dist > 8) insertRoad(startPt.x, startPt.y, end.x, end.y);
@@ -209,11 +224,25 @@
       startPt = null;
       currentPt = null;
       render();
-    });
+    }
 
-    canvas.addEventListener('mouseleave', () => {
-      if (drawing) { drawing = false; startPt = null; currentPt = null; render(); }
-    });
+    function cancelDraw() {
+      if (!drawing) return;
+      drawing = false;
+      startPt = null;
+      currentPt = null;
+      render();
+    }
+
+    canvas.addEventListener('mousedown', beginDraw);
+    canvas.addEventListener('mousemove', updateDraw);
+    canvas.addEventListener('mouseup', endDraw);
+    canvas.addEventListener('mouseleave', cancelDraw);
+
+    canvas.addEventListener('touchstart', beginDraw, { passive: false });
+    canvas.addEventListener('touchmove', updateDraw, { passive: false });
+    canvas.addEventListener('touchend', endDraw, { passive: false });
+    canvas.addEventListener('touchcancel', cancelDraw);
 
     document.getElementById('reset').addEventListener('click', () => {
       root = { x: 0, y: 0, w: canvas.width, h: canvas.height, depth: 0, children: null };
