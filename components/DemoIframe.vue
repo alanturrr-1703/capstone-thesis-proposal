@@ -11,11 +11,31 @@ const src = `${base}${props.demo}`
 </script>
 
 <template>
-  <iframe
-    :src="src"
-    width="100%"
-    :height="height"
-    frameborder="0"
-    class="rounded-lg shadow-lg"
-  />
+  <div
+    class="demo-iframe-wrap"
+    @pointerdown.stop
+    @pointermove.stop
+    @pointerup.stop
+    @touchstart.stop
+    @touchmove.stop
+    @touchend.stop
+  >
+    <iframe
+      :src="src"
+      width="100%"
+      :height="height"
+      frameborder="0"
+      class="rounded-lg shadow-lg"
+      allow="fullscreen"
+    />
+  </div>
 </template>
+
+<style scoped>
+.demo-iframe-wrap {
+  touch-action: none;
+}
+.demo-iframe-wrap iframe {
+  touch-action: none;
+}
+</style>
