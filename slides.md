@@ -111,7 +111,7 @@ layout: default
 
 # Phase 1: The Distributed Engine
 
-<div class="grid grid-cols-2 gap-6 mt-4">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
 
 <div class="text-sm text-left space-y-3">
 
@@ -132,7 +132,7 @@ PR trees assume point data. PM trees subdivide cells **only where a polygon or l
 
 <QuadtreeDemo />
 
-<div class="text-xs opacity-60 mt-1">Interactive: tap or drag to draw a road — watch recursive quadrant subdivision</div>
+<div class="text-xs opacity-60 mt-1">On iPhone: tap green button → fullscreen draw mode. Desktop: click &amp; drag.</div>
 
 </div>
 
@@ -178,7 +178,7 @@ layout: default
 
 # Phase 2: The Autonomous MCP Pipeline
 
-<div class="grid grid-cols-2 gap-6 mt-4">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
 
 <div class="text-sm text-left space-y-3">
 

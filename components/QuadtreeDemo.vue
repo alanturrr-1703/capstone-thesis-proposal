@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const overlayCanvasRef = ref<HTMLCanvasElement | null>(null)
 const stats = ref('Cells: 1 · Depth: 0 · Roads: 0')
+const drawMode = ref(false)
+const isTouch = ref(false)
 
 const MAX_DEPTH = 6
 const MIN_SIZE = 12
@@ -25,6 +28,8 @@ let startPt: { x: number; y: number } | null = null
 let currentPt: { x: number; y: number } | null = null
 let ctx: CanvasRenderingContext2D | null = null
 let activePointerId: number | null = null
+let activeTouchId: number | null = null
+let boundCanvas: HTMLCanvasElement | null = null
 
 function cross(px: number, py: number, qx: number, qy: number, rx: number, ry: number) {
   return (qx - px) * (ry - py) - (qy - py) * (rx - px)
@@ -85,6 +90,10 @@ function maxDepth(node: Cell): number {
   return Math.max(...node.children.map(maxDepth))
 }
 
+function activeCanvas() {
+  return drawMode.value ? overlayCanvasRef.value : canvasRef.value
+}
+
 function drawNode(node: Cell) {
   if (!ctx) return
   const colors = ['#21262d', '#1a2332', '#152238', '#101d2e', '#0d1828', '#0a1420', '#070f18']
@@ -98,7 +107,7 @@ function drawNode(node: Cell) {
 }
 
 function render() {
-  const canvas = canvasRef.value
+  const canvas = activeCanvas()
   if (!ctx || !canvas || !root) return
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   drawNode(root)
@@ -129,129 +138,279 @@ function render() {
   stats.value = `Cells: ${countCells(root)} · Depth: ${maxDepth(root)} · Roads: ${roads.length}`
 }
 
-function getPos(e: PointerEvent) {
-  const canvas = canvasRef.value!
+function getPosFromClient(clientX: number, clientY: number) {
+  const canvas = activeCanvas()!
   const rect = canvas.getBoundingClientRect()
   const scaleX = canvas.width / rect.width
   const scaleY = canvas.height / rect.height
   return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY,
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY,
   }
 }
 
-function beginDraw(e: PointerEvent) {
-  if (activePointerId !== null) return
-  activePointerId = e.pointerId
-  canvasRef.value?.setPointerCapture(e.pointerId)
-  e.preventDefault()
-  startPt = getPos(e)
-  currentPt = startPt
-  drawing = true
-  render()
-}
-
-function updateDraw(e: PointerEvent) {
-  if (!drawing || e.pointerId !== activePointerId) return
-  e.preventDefault()
-  currentPt = getPos(e)
-  render()
-}
-
-function endDraw(e: PointerEvent) {
-  if (!drawing || e.pointerId !== activePointerId) return
-  e.preventDefault()
-  const end = getPos(e)
+function finishDraw(end: { x: number; y: number }) {
   if (startPt) {
     const dist = Math.hypot(end.x - startPt.x, end.y - startPt.y)
     if (dist > 8) insertRoad(startPt.x, startPt.y, end.x, end.y)
   }
-  canvasRef.value?.releasePointerCapture(e.pointerId)
-  activePointerId = null
   drawing = false
   startPt = null
   currentPt = null
+  activePointerId = null
+  activeTouchId = null
   render()
 }
 
-function cancelDraw(e: PointerEvent) {
-  if (activePointerId !== null && e.pointerId !== activePointerId) return
-  if (activePointerId !== null)
-    canvasRef.value?.releasePointerCapture(activePointerId)
-  activePointerId = null
-  drawing = false
-  startPt = null
-  currentPt = null
+function blockEvent(e: Event) {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
+function beginDrawAt(pt: { x: number; y: number }) {
+  startPt = pt
+  currentPt = pt
+  drawing = true
   render()
+}
+
+function updateDrawAt(pt: { x: number; y: number }) {
+  if (!drawing) return
+  currentPt = pt
+  render()
+}
+
+function onPointerDown(e: PointerEvent) {
+  if (activeTouchId !== null || activePointerId !== null) return
+  blockEvent(e)
+  activePointerId = e.pointerId
+  try { boundCanvas?.setPointerCapture(e.pointerId) } catch { /* iOS */ }
+  beginDrawAt(getPosFromClient(e.clientX, e.clientY))
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!drawing || e.pointerId !== activePointerId) return
+  blockEvent(e)
+  updateDrawAt(getPosFromClient(e.clientX, e.clientY))
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!drawing || e.pointerId !== activePointerId) return
+  blockEvent(e)
+  try { boundCanvas?.releasePointerCapture(e.pointerId) } catch { /* iOS */ }
+  finishDraw(getPosFromClient(e.clientX, e.clientY))
+}
+
+function findTouch(e: TouchEvent) {
+  if (activeTouchId === null) return e.changedTouches[0] ?? e.touches[0]
+  for (const t of e.changedTouches) {
+    if (t.identifier === activeTouchId) return t
+  }
+  for (const t of e.touches) {
+    if (t.identifier === activeTouchId) return t
+  }
+  return null
+}
+
+function onTouchStart(e: TouchEvent) {
+  if (activePointerId !== null || e.touches.length !== 1) return
+  blockEvent(e)
+  const t = e.touches[0]
+  activeTouchId = t.identifier
+  beginDrawAt(getPosFromTouch(t))
+}
+
+function getPosFromTouch(t: Touch) {
+  return getPosFromClient(t.clientX, t.clientY)
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (activeTouchId === null) return
+  blockEvent(e)
+  const t = findTouch(e) ?? e.touches[0]
+  if (t) updateDrawAt(getPosFromTouch(t))
+}
+
+function onTouchEnd(e: TouchEvent) {
+  if (activeTouchId === null) return
+  blockEvent(e)
+  const t = findTouch(e)
+  if (t) finishDraw(getPosFromTouch(t))
+  else if (currentPt) finishDraw(currentPt)
+}
+
+function onDocTouchMove(e: TouchEvent) {
+  if (activeTouchId !== null && drawing) onTouchMove(e)
+}
+
+function onDocTouchEnd(e: TouchEvent) {
+  if (activeTouchId !== null && drawing) onTouchEnd(e)
 }
 
 function reset() {
-  const canvas = canvasRef.value
+  const canvas = activeCanvas()
   if (!canvas) return
   root = { x: 0, y: 0, w: canvas.width, h: canvas.height, depth: 0, children: null }
   roads = []
   drawing = false
   activePointerId = null
+  activeTouchId = null
   startPt = null
   currentPt = null
   render()
 }
 
-function resizeCanvas() {
-  const canvas = canvasRef.value
-  const wrap = canvas?.parentElement
-  if (!canvas || !wrap) return
-  const w = Math.floor(wrap.clientWidth)
-  const h = Math.max(180, Math.min(300, Math.floor(w * 0.52)))
-  if (canvas.width === w && canvas.height === h) return
+function sizeCanvas(container: HTMLElement, fullscreen = false) {
+  const canvas = activeCanvas()
+  if (!canvas) return
+  const w = Math.floor(container.clientWidth)
+  const h = fullscreen
+    ? Math.floor(Math.min(window.innerHeight * 0.5, w * 0.7))
+    : Math.max(160, Math.min(260, Math.floor(w * 0.52)))
+  const savedRoads = [...roads]
   canvas.width = w
   canvas.height = h
-  reset()
+  canvas.style.width = `${w}px`
+  canvas.style.height = `${h}px`
+  root = { x: 0, y: 0, w, h, depth: 0, children: null }
+  roads = []
+  for (const r of savedRoads) insertRoad(r.x1, r.y1, r.x2, r.y2)
+  drawing = false
+  activePointerId = null
+  activeTouchId = null
+  startPt = null
+  currentPt = null
+  render()
+}
+
+function bindCanvas(canvas: HTMLCanvasElement) {
+  if (boundCanvas === canvas) return
+  if (boundCanvas) unbindCanvas(boundCanvas)
+  boundCanvas = canvas
+  ctx = canvas.getContext('2d')
+  const opts = { passive: false, capture: true } as AddEventListenerOptions
+  canvas.addEventListener('pointerdown', onPointerDown, opts)
+  canvas.addEventListener('pointermove', onPointerMove, opts)
+  canvas.addEventListener('pointerup', onPointerUp, opts)
+  canvas.addEventListener('pointercancel', onPointerUp, opts)
+  canvas.addEventListener('touchstart', onTouchStart, opts)
+  canvas.addEventListener('touchmove', onTouchMove, opts)
+  canvas.addEventListener('touchend', onTouchEnd, opts)
+  canvas.addEventListener('touchcancel', onTouchEnd, opts)
+}
+
+function unbindCanvas(canvas: HTMLCanvasElement) {
+  const opts = { capture: true } as EventListenerOptions
+  canvas.removeEventListener('pointerdown', onPointerDown, opts)
+  canvas.removeEventListener('pointermove', onPointerMove, opts)
+  canvas.removeEventListener('pointerup', onPointerUp, opts)
+  canvas.removeEventListener('pointercancel', onPointerUp, opts)
+  canvas.removeEventListener('touchstart', onTouchStart, opts)
+  canvas.removeEventListener('touchmove', onTouchMove, opts)
+  canvas.removeEventListener('touchend', onTouchEnd, opts)
+  canvas.removeEventListener('touchcancel', onTouchEnd, opts)
+  if (boundCanvas === canvas) boundCanvas = null
+}
+
+function setupActiveCanvas() {
+  const canvas = activeCanvas()
+  const container = drawMode.value
+    ? document.getElementById('quadtree-draw-overlay')
+    : canvas?.parentElement
+  if (!canvas || !container) return
+  bindCanvas(canvas)
+  sizeCanvas(container, drawMode.value)
+}
+
+async function openDrawMode() {
+  drawMode.value = true
+  document.body.style.overflow = 'hidden'
+  await nextTick()
+  setupActiveCanvas()
+}
+
+async function closeDrawMode() {
+  drawMode.value = false
+  document.body.style.overflow = ''
+  await nextTick()
+  setupActiveCanvas()
 }
 
 let ro: ResizeObserver | null = null
 
-onMounted(() => {
-  const canvas = canvasRef.value
-  if (!canvas) return
-  ctx = canvas.getContext('2d')
-  resizeCanvas()
-  ro = new ResizeObserver(resizeCanvas)
-  ro.observe(canvas.parentElement!)
+watch(drawMode, async () => {
+  await nextTick()
+  setupActiveCanvas()
 })
 
-onUnmounted(() => ro?.disconnect())
+onMounted(() => {
+  isTouch.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  document.addEventListener('touchmove', onDocTouchMove, { passive: false })
+  document.addEventListener('touchend', onDocTouchEnd, { passive: false })
+  document.addEventListener('touchcancel', onDocTouchEnd, { passive: false })
+  nextTick(() => setupActiveCanvas())
+  ro = new ResizeObserver(() => {
+    const container = drawMode.value
+      ? document.getElementById('quadtree-draw-overlay')
+      : canvasRef.value?.parentElement
+    if (container && activeCanvas()) sizeCanvas(container, drawMode.value)
+  })
+  if (canvasRef.value?.parentElement) ro.observe(canvasRef.value.parentElement)
+})
+
+onUnmounted(() => {
+  document.body.style.overflow = ''
+  if (boundCanvas) unbindCanvas(boundCanvas)
+  document.removeEventListener('touchmove', onDocTouchMove)
+  document.removeEventListener('touchend', onDocTouchEnd)
+  document.removeEventListener('touchcancel', onDocTouchEnd)
+  ro?.disconnect()
+})
 </script>
 
 <template>
-  <div
-    class="quadtree-demo"
-    @pointerdown.stop
-    @pointermove.stop
-    @pointerup.stop
-    @pointercancel.stop
-    @touchstart.stop
-    @touchmove.stop
-    @touchend.stop
-  >
+  <div class="quadtree-demo">
     <div class="quadtree-header">
       <span class="quadtree-title">PM Quadtree — Draw a Road</span>
       <span class="quadtree-stats">{{ stats }}</span>
     </div>
-    <canvas
-      ref="canvasRef"
-      class="quadtree-canvas"
-      @pointerdown="beginDraw"
-      @pointermove="updateDraw"
-      @pointerup="endDraw"
-      @pointercancel="cancelDraw"
-      @pointerleave="cancelDraw"
-    />
+
+    <button
+      v-if="isTouch"
+      type="button"
+      class="draw-mode-btn"
+      @click.stop.prevent="openDrawMode"
+    >
+      Tap here to draw (iPhone)
+    </button>
+
+    <canvas v-show="!isTouch" ref="canvasRef" class="quadtree-canvas" />
+
+    <p v-if="isTouch" class="touch-hint">
+      Slidev blocks touch on the small canvas. Use the button above for fullscreen draw mode.
+    </p>
+
     <div class="quadtree-footer">
-      <span>Tap &amp; drag to draw a road</span>
-      <button type="button" @click.stop="reset">Reset</button>
+      <span>{{ isTouch ? 'Fullscreen draw mode' : 'Click & drag to draw' }}</span>
+      <button type="button" @click.stop.prevent="reset">Reset</button>
     </div>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="drawMode"
+      id="quadtree-draw-overlay"
+      class="draw-overlay"
+    >
+      <div class="draw-overlay-header">
+        <span>Drag finger to draw road</span>
+        <button type="button" class="done-btn" @click.stop.prevent="closeDrawMode">Done</button>
+      </div>
+      <div class="draw-overlay-stats">{{ stats }}</div>
+      <canvas ref="overlayCanvasRef" class="quadtree-canvas overlay-canvas" />
+      <button type="button" class="reset-overlay-btn" @click.stop.prevent="reset">Reset</button>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -263,6 +422,7 @@ onUnmounted(() => ro?.disconnect())
   padding: 10px;
   touch-action: none;
   -webkit-touch-callout: none;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -283,18 +443,38 @@ onUnmounted(() => ro?.disconnect())
 .quadtree-stats {
   font-size: 10px;
   color: #8b949e;
-  white-space: nowrap;
+}
+
+.draw-mode-btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 14px;
+  background: #238636;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  font-family: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch-hint {
+  font-size: 10px;
+  color: #8b949e;
+  margin: 6px 0;
+  line-height: 1.4;
 }
 
 .quadtree-canvas {
   display: block;
-  width: 100%;
-  height: auto;
   border: 1px solid #30363d;
   border-radius: 4px;
   background: #161b22;
-  cursor: crosshair;
   touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .quadtree-footer {
@@ -310,10 +490,79 @@ onUnmounted(() => ro?.disconnect())
   background: #21262d;
   border: 1px solid #30363d;
   color: #c9d1d9;
-  padding: 4px 10px;
+  padding: 8px 14px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: 12px;
   font-family: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+</style>
+
+<style>
+.draw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #0d1117;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+.draw-overlay-header {
+  width: 100%;
+  max-width: 600px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+  color: #c9d1d9;
+}
+
+.draw-overlay-stats {
+  width: 100%;
+  max-width: 600px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #8b949e;
+  margin-bottom: 10px;
+}
+
+.draw-overlay .overlay-canvas {
+  width: calc(100% - 32px) !important;
+  max-width: 600px;
+  border: 2px solid #388bfd !important;
+  border-radius: 8px;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.done-btn {
+  background: #388bfd;
+  border: none;
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reset-overlay-btn {
+  margin-top: 14px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 14px;
   touch-action: manipulation;
 }
 </style>
