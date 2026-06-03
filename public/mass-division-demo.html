@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MASS Distributed Subdivision</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: #0f1419;
+      color: #c9d1d9;
+      padding: 10px;
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    h1 { font-size: 12px; font-weight: 600; color: #d2a8ff; }
+    .phase { font-size: 10px; color: #58a6ff; }
+    .nodes {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .node {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 5px;
+      padding: 5px 6px;
+      transition: border-color 0.4s, box-shadow 0.4s;
+    }
+    .node.active {
+      border-color: #58a6ff;
+      box-shadow: 0 0 8px rgba(88, 166, 255, 0.25);
+    }
+    .node.working {
+      border-color: #3fb950;
+      box-shadow: 0 0 8px rgba(63, 185, 80, 0.3);
+    }
+    .node.finished {
+      border-color: #484f58;
+      box-shadow: none;
+      opacity: 0.55;
+    }
+    .node-id { font-size: 9px; color: #8b949e; margin-bottom: 3px; }
+    .node-id span { color: #c9d1d9; font-weight: 600; }
+    .threads {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      min-height: 14px;
+    }
+    .thread {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      transform: scale(0);
+      transition: transform 0.25s ease, background 0.3s;
+    }
+    .thread.spawned {
+      transform: scale(1);
+      background: #388bfd;
+      border-color: #58a6ff;
+    }
+    .thread.detached {
+      transform: scale(0);
+      opacity: 0;
+    }
+    .places-count {
+      font-size: 8px;
+      color: #6e7681;
+      margin-top: 3px;
+    }
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 168px;
+      gap: 6px;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      background: #161b22;
+    }
+    .sidebar { display: flex; flex-direction: column; gap: 5px; }
+    button {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #c9d1d9;
+      padding: 5px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.primary { background: #238636; border-color: #2ea043; color: #fff; font-weight: 600; }
+    button:hover { border-color: #58a6ff; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .log {
+      flex: 1;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 5px;
+      font-size: 8px;
+      line-height: 1.55;
+      overflow-y: auto;
+      max-height: 210px;
+    }
+    .log .init { color: #58a6ff; }
+    .log .agent { color: #d2a8ff; }
+    .log .place { color: #3fb950; }
+    .log .finish { color: #f0883e; }
+    .log .dim { color: #484f58; }
+    footer { margin-top: 5px; font-size: 9px; color: #6e7681; display: flex; justify-content: space-between; }
+    .legend { display: flex; gap: 10px; }
+    .legend span::before {
+      content: '';
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-right: 3px;
+      vertical-align: middle;
+    }
+    .legend .a::before { background: #d2a8ff; }
+    .legend .p::before { background: #58a6ff; opacity: 0.5; border: 1px solid #58a6ff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MASS Lifecycle — Distributed PM Subdivision</h1>
+    <div class="phase" id="phaseLabel">Ready</div>
+  </header>
+
+  <div class="nodes" id="nodes"></div>
+
+  <div class="main">
+    <canvas id="canvas" width="380" height="220"></canvas>
+    <div class="sidebar">
+      <button class="primary" id="playBtn">▶ Play Animation</button>
+      <button id="replayBtn" disabled>↺ Replay</button>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="legend">
+      <span class="a">Agent (migrates)</span>
+      <span class="p">Place (PM cell)</span>
+    </div>
+    <span>nodes.xml · 4 processes · 4 threads/core</span>
+  </footer>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const nodesEl = document.getElementById('nodes');
+    const logEl = document.getElementById('log');
+    const phaseLabel = document.getElementById('phaseLabel');
+    const playBtn = document.getElementById('playBtn');
+    const replayBtn = document.getElementById('replayBtn');
+
+    const NODE_COUNT = 4;
+    const THREADS_PER_NODE = 4;
+    const MAX_DEPTH = 4;
+
+    const NODE_REGIONS = [
+      { id: 0, x: 0, y: 0, w: 0.5, h: 0.5, label: 'Node 0' },
+      { id: 1, x: 0.5, y: 0, w: 0.5, h: 0.5, label: 'Node 1' },
+      { id: 2, x: 0, y: 0.5, w: 0.5, h: 0.5, label: 'Node 2' },
+      { id: 3, x: 0.5, y: 0.5, w: 0.5, h: 0.5, label: 'Node 3' },
+    ];
+
+    const ROAD = { x1: 40, y1: 180, x2: 340, y2: 40 };
+
+    let root = null;
+    let agents = [];
+    let animating = false;
+    let nodeEls = [];
+    let placesPerNode = [1, 0, 0, 0];
+
+    function makeRoot() {
+      return { x: 0, y: 0, w: canvas.width, h: canvas.height, depth: 0, children: null, subdivided: false, nodeId: 0 };
+    }
+
+    function ownerForCell(cx, cy) {
+      const nx = cx / canvas.width;
+      const ny = cy / canvas.height;
+      for (const r of NODE_REGIONS) {
+        if (nx >= r.x && nx < r.x + r.w && ny >= r.y && ny < r.y + r.h) return r.id;
+      }
+      return 0;
+    }
+
+    function lineIntersectsRect(x1, y1, x2, y2, rx, ry, rw, rh) {
+      if (Math.min(x1, x2) > rx + rw || Math.max(x1, x2) < rx ||
+          Math.min(y1, y2) > ry + rh || Math.max(y1, y2) < ry) return false;
+      const edges = [
+        [rx, ry, rx + rw, ry], [rx + rw, ry, rx + rw, ry + rh],
+        [rx + rw, ry + rh, rx, ry + rh], [rx, ry + rh, rx, ry]
+      ];
+      for (const [ex1, ey1, ex2, ey2] of edges) {
+        if (segmentsIntersect(x1, y1, x2, y2, ex1, ey1, ex2, ey2)) return true;
+      }
+      return x1 >= rx && x1 <= rx + rw && y1 >= ry && y1 <= ry + rh;
+    }
+
+    function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+      const d1 = cross(cx, cy, dx, dy, ax, ay, bx, by);
+      const d2 = cross(cx, cy, dx, dy, bx, by, ax, ay);
+      const d3 = cross(ax, ay, bx, by, cx, cy, dx, dy);
+      const d4 = cross(ax, ay, bx, by, dx, dy, cx, cy);
+      return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+             ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+    }
+
+    function cross(px, py, qx, qy, rx, ry) {
+      return (qx - px) * (ry - py) - (qy - py) * (rx - px);
+    }
+
+    function subdivideNode(node) {
+      if (node.children || node.depth >= MAX_DEPTH) return null;
+      const hw = node.w / 2, hh = node.h / 2;
+      node.children = [
+        { x: node.x, y: node.y, w: hw, h: hh, depth: node.depth + 1, children: null, subdivided: false,
+          nodeId: ownerForCell(node.x + hw / 2, node.y + hh / 2) },
+        { x: node.x + hw, y: node.y, w: hw, h: hh, depth: node.depth + 1, children: null, subdivided: false,
+          nodeId: ownerForCell(node.x + hw + hw / 2, node.y + hh / 2) },
+        { x: node.x, y: node.y + hh, w: hw, h: hh, depth: node.depth + 1, children: null, subdivided: false,
+          nodeId: ownerForCell(node.x + hw / 2, node.y + hh + hh / 2) },
+        { x: node.x + hw, y: node.y + hh, w: hw, h: hh, depth: node.depth + 1, children: null, subdivided: false,
+          nodeId: ownerForCell(node.x + hw + hw / 2, node.y + hh + hh / 2) },
+      ];
+      node.subdivided = true;
+      return node.children;
+    }
+
+    function leaves(node, out = []) {
+      if (!node.children) { out.push(node); return out; }
+      node.children.forEach(c => leaves(c, out));
+      return out;
+    }
+
+    function intersectingLeaves(node, out = []) {
+      if (!lineIntersectsRect(ROAD.x1, ROAD.y1, ROAD.x2, ROAD.y2, node.x, node.y, node.w, node.h)) return out;
+      if (!node.children) { out.push(node); return out; }
+      node.children.forEach(c => intersectingLeaves(c, out));
+      return out;
+    }
+
+    function buildNodesUI() {
+      nodesEl.innerHTML = '';
+      nodeEls = NODE_REGIONS.map((r, i) => {
+        const el = document.createElement('div');
+        el.className = 'node';
+        el.innerHTML = `
+          <div class="node-id"><span>${r.label}</span> · process ${i}</div>
+          <div class="threads" id="threads-${i}"></div>
+          <div class="places-count" id="places-${i}">Places: 0</div>`;
+        nodesEl.appendChild(el);
+        const threadsEl = el.querySelector('.threads');
+        for (let t = 0; t < THREADS_PER_NODE; t++) {
+          const th = document.createElement('div');
+          th.className = 'thread';
+          th.title = `core thread ${t}`;
+          threadsEl.appendChild(th);
+        }
+        return el;
+      });
+    }
+
+    function setPhase(text) { phaseLabel.textContent = text; }
+
+    function log(msg, cls = '') {
+      const line = document.createElement('div');
+      line.className = cls;
+      line.textContent = msg;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function updatePlacesCounts() {
+      placesPerNode = [0, 0, 0, 0];
+      leaves(root).forEach(cell => { placesPerNode[cell.nodeId]++; });
+      placesPerNode.forEach((n, i) => {
+        document.getElementById(`places-${i}`).textContent = `Places: ${n}`;
+      });
+    }
+
+    function nodeColor(id) {
+      return ['#388bfd', '#a371f7', '#3fb950', '#f0883e'][id];
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      NODE_REGIONS.forEach(r => {
+        const rx = r.x * canvas.width, ry = r.y * canvas.height;
+        const rw = r.w * canvas.width, rh = r.h * canvas.height;
+        ctx.fillStyle = nodeColor(r.id) + '0a';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = nodeColor(r.id) + '33';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+        ctx.setLineDash([]);
+        ctx.fillStyle = nodeColor(r.id) + 'aa';
+        ctx.font = '8px monospace';
+        ctx.fillText(r.label, rx + 4, ry + 11);
+      });
+
+      function drawCell(node) {
+        const nc = nodeColor(node.nodeId);
+        ctx.fillStyle = nc + (node.subdivided ? '18' : '28');
+        ctx.fillRect(node.x + 0.5, node.y + 0.5, node.w - 1, node.h - 1);
+        ctx.strokeStyle = nc + (node.subdivided ? '88' : '44');
+        ctx.lineWidth = node.subdivided ? 1.2 : 0.8;
+        ctx.strokeRect(node.x + 0.5, node.y + 0.5, node.w - 1, node.h - 1);
+        if (node.children) node.children.forEach(drawCell);
+      }
+      if (root) drawCell(root);
+
+      ctx.strokeStyle = '#f0883e';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(ROAD.x1, ROAD.y1);
+      ctx.lineTo(ROAD.x2, ROAD.y2);
+      ctx.stroke();
+
+      agents.forEach(a => {
+        if (a.visible === false) return;
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#d2a8ff';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = '#d2a8ff';
+        ctx.font = '7px monospace';
+        ctx.fillText(`A${a.id}`, a.x + 7, a.y - 5);
+      });
+    }
+
+    function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    async function animateAgent(agent, fromX, fromY, toX, toY, duration = 600) {
+      agent.visible = true;
+      const start = performance.now();
+      return new Promise(resolve => {
+        function step(now) {
+          const t = Math.min(1, (now - start) / duration);
+          const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+          agent.x = lerp(fromX, toX, ease);
+          agent.y = lerp(fromY, toY, ease);
+          draw();
+          if (t < 1) requestAnimationFrame(step);
+          else resolve();
+        }
+        requestAnimationFrame(step);
+      });
+    }
+
+    async function spawnThreads(nodeIdx, stagger = 80) {
+      const threads = nodeEls[nodeIdx].querySelectorAll('.thread');
+      for (let i = 0; i < threads.length; i++) {
+        await delay(stagger);
+        threads[i].classList.add('spawned');
+      }
+    }
+
+    async function detachThreads(nodeIdx, stagger = 60) {
+      const threads = nodeEls[nodeIdx].querySelectorAll('.thread');
+      for (let i = threads.length - 1; i >= 0; i--) {
+        await delay(stagger);
+        threads[i].classList.add('detached');
+        threads[i].classList.remove('spawned');
+      }
+    }
+
+    async function runAnimation() {
+      if (animating) return;
+      animating = true;
+      playBtn.disabled = true;
+      replayBtn.disabled = true;
+      logEl.innerHTML = '';
+      root = makeRoot();
+      agents = [];
+      placesPerNode = [1, 0, 0, 0];
+      buildNodesUI();
+      draw();
+
+      // ── MASS.init() ──
+      setPhase('MASS.init()');
+      log('// All processes call MASS.init() — computation begins', 'init');
+      log('MASS.setNodeFilePath("nodes.xml")', 'dim');
+      log('MASS.init()', 'init');
+      await delay(500);
+
+      for (let i = 0; i < NODE_COUNT; i++) {
+        nodeEls[i].classList.add('active');
+        log(`process ${i}: spawning ${THREADS_PER_NODE} threads (local CPU cores)`, 'init');
+        await spawnThreads(i, 70);
+        await delay(200);
+      }
+      log('Places[] allocated — PM Quadtree root on Node 0', 'place');
+      updatePlacesCounts();
+      draw();
+      await delay(700);
+
+      // ── Agent insertion workflow ──
+      setPhase('Agent migration → subdivide');
+      log('// Agent carries road insertion across nodes', 'agent');
+      await delay(400);
+
+      const subdivQueue = [];
+      function collectSubdiv(node) {
+        if (!lineIntersectsRect(ROAD.x1, ROAD.y1, ROAD.x2, ROAD.y2, node.x, node.y, node.w, node.h)) return;
+        if (!node.children && node.depth < MAX_DEPTH) subdivQueue.push(node);
+        if (node.children) node.children.forEach(collectSubdiv);
+      }
+      collectSubdiv(root);
+
+      let agentId = 0;
+      for (const cell of subdivQueue) {
+        const targetNode = cell.nodeId;
+        const cx = cell.x + cell.w / 2;
+        const cy = cell.y + cell.h / 2;
+        const homeNode = agentId % NODE_COUNT;
+
+        const agent = { id: agentId, x: 0, y: 0, visible: false };
+        agents.push(agent);
+
+        const homeCenter = {
+          x: (NODE_REGIONS[homeNode].x + NODE_REGIONS[homeNode].w / 2) * canvas.width,
+          y: (NODE_REGIONS[homeNode].y + NODE_REGIONS[homeNode].h / 2) * canvas.height,
+        };
+        agent.x = homeCenter.x;
+        agent.y = homeCenter.y;
+
+        nodeEls[targetNode].classList.add('working');
+        log(`Agent ${agentId}: migrate(process ${homeNode} → Node ${targetNode})`, 'agent');
+        await delay(300);
+
+        await animateAgent(agent, homeCenter.x, homeCenter.y, cx, cy, 700);
+        log(`Agent ${agentId}: callPlace(${targetNode}) → subdivide PM cell d=${cell.depth}`, 'place');
+
+        subdivideNode(cell);
+        updatePlacesCounts();
+        draw();
+        await delay(450);
+
+        nodeEls[targetNode].classList.remove('working');
+        agent.visible = false;
+        agentId++;
+      }
+
+      log(`// ${subdivQueue.length} subdivisions routed across cluster`, 'place');
+      await delay(600);
+
+      // ── MASS.finish() ──
+      setPhase('MASS.finish()');
+      log('// All processes call MASS.finish() together', 'finish');
+      log('MASS.finish()', 'finish');
+      await delay(400);
+
+      for (let i = NODE_COUNT - 1; i >= 0; i--) {
+        log(`process ${i}: detach threads from Places & Agents`, 'finish');
+        nodeEls[i].classList.remove('active', 'working');
+        nodeEls[i].classList.add('finished');
+        await detachThreads(i, 55);
+        await delay(180);
+      }
+      log('remote processes terminated · cleanup complete', 'finish');
+      setPhase('Complete');
+      draw();
+
+      animating = false;
+      playBtn.disabled = false;
+      replayBtn.disabled = false;
+    }
+
+    playBtn.addEventListener('click', runAnimation);
+    replayBtn.addEventListener('click', runAnimation);
+
+    buildNodesUI();
+    root = makeRoot();
+    updatePlacesCounts();
+    draw();
+  </script>
+</body>
+</html>

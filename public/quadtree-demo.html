@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PM Quadtree Visualizer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: #0f1419;
+      color: #c9d1d9;
+      padding: 12px;
+      user-select: none;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    h1 { font-size: 13px; font-weight: 600; color: #58a6ff; }
+    .stats { font-size: 11px; color: #8b949e; }
+    canvas {
+      display: block;
+      width: 100%;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      cursor: crosshair;
+      background: #161b22;
+    }
+    footer {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      font-size: 10px;
+      color: #6e7681;
+    }
+    button {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #c9d1d9;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { background: #30363d; border-color: #58a6ff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PM Quadtree — Draw a Road</h1>
+    <div class="stats" id="stats">Cells: 1 · Depth: 0 · Roads: 0</div>
+  </header>
+  <canvas id="canvas" width="560" height="280"></canvas>
+  <footer>
+    <span>Click &amp; drag to insert continuous geometry</span>
+    <button id="reset">Reset</button>
+  </footer>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const statsEl = document.getElementById('stats');
+    const MAX_DEPTH = 6;
+    const MIN_SIZE = 12;
+
+    let root = { x: 0, y: 0, w: canvas.width, h: canvas.height, depth: 0, children: null };
+    let roads = [];
+    let drawing = false;
+    let startPt = null;
+    let currentPt = null;
+
+    function lineIntersectsRect(x1, y1, x2, y2, rx, ry, rw, rh) {
+      const left = rx, right = rx + rw, top = ry, bottom = ry + rh;
+      if (Math.min(x1, x2) > right || Math.max(x1, x2) < left ||
+          Math.min(y1, y2) > bottom || Math.max(y1, y2) < top) return false;
+      const edges = [
+        [left, top, right, top], [right, top, right, bottom],
+        [right, bottom, left, bottom], [left, bottom, left, top]
+      ];
+      for (const [ex1, ey1, ex2, ey2] of edges) {
+        if (segmentsIntersect(x1, y1, x2, y2, ex1, ey1, ex2, ey2)) return true;
+      }
+      return x1 >= left && x1 <= right && y1 >= top && y1 <= bottom;
+    }
+
+    function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+      const d1 = cross(cx, cy, dx, dy, ax, ay, bx, by);
+      const d2 = cross(cx, cy, dx, dy, bx, by, ax, ay);
+      const d3 = cross(ax, ay, bx, by, cx, cy, dx, dy);
+      const d4 = cross(ax, ay, bx, by, dx, dy, cx, cy);
+      if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+          ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+      return false;
+    }
+
+    function cross(px, py, qx, qy, rx, ry, sx, sy) {
+      return (qx - px) * (ry - py) - (qy - py) * (rx - px);
+    }
+
+    function subdivide(node) {
+      if (node.children || node.depth >= MAX_DEPTH ||
+          node.w < MIN_SIZE * 2 || node.h < MIN_SIZE * 2) return;
+      const hw = node.w / 2, hh = node.h / 2;
+      node.children = [
+        { x: node.x,     y: node.y,     w: hw, h: hh, depth: node.depth + 1, children: null },
+        { x: node.x+hw,  y: node.y,     w: hw, h: hh, depth: node.depth + 1, children: null },
+        { x: node.x,     y: node.y+hh,  w: hw, h: hh, depth: node.depth + 1, children: null },
+        { x: node.x+hw,  y: node.y+hh,  w: hw, h: hh, depth: node.depth + 1, children: null },
+      ];
+    }
+
+    function insertRoad(x1, y1, x2, y2) {
+      roads.push({ x1, y1, x2, y2 });
+      subdivideForRoad(root, x1, y1, x2, y2);
+    }
+
+    function subdivideForRoad(node, x1, y1, x2, y2) {
+      if (!lineIntersectsRect(x1, y1, x2, y2, node.x, node.y, node.w, node.h)) return;
+      subdivide(node);
+      if (node.children) {
+        for (const child of node.children) subdivideForRoad(child, x1, y1, x2, y2);
+      }
+    }
+
+    function countCells(node) {
+      if (!node.children) return 1;
+      return node.children.reduce((s, c) => s + countCells(c), 0);
+    }
+
+    function maxDepth(node) {
+      if (!node.children) return node.depth;
+      return Math.max(...node.children.map(maxDepth));
+    }
+
+    function drawNode(node) {
+      const colors = ['#21262d', '#1a2332', '#152238', '#101d2e', '#0d1828', '#0a1420', '#070f18'];
+      const color = colors[Math.min(node.depth, colors.length - 1)];
+      ctx.fillStyle = color;
+      ctx.fillRect(node.x + 0.5, node.y + 0.5, node.w - 1, node.h - 1);
+      ctx.strokeStyle = `rgba(88, 166, 255, ${0.15 + node.depth * 0.08})`;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(node.x + 0.5, node.y + 0.5, node.w - 1, node.h - 1);
+      if (node.children) node.children.forEach(drawNode);
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawNode(root);
+      ctx.lineCap = 'round';
+      for (const r of roads) {
+        ctx.strokeStyle = '#f0883e';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(r.x1, r.y1);
+        ctx.lineTo(r.x2, r.y2);
+        ctx.stroke();
+        ctx.fillStyle = '#f0883e';
+        ctx.beginPath();
+        ctx.arc(r.x1, r.y1, 3, 0, Math.PI * 2);
+        ctx.arc(r.x2, r.y2, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (drawing && startPt && currentPt) {
+        ctx.strokeStyle = 'rgba(240, 136, 62, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(startPt.x, startPt.y);
+        ctx.lineTo(currentPt.x, currentPt.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      statsEl.textContent = `Cells: ${countCells(root)} · Depth: ${maxDepth(root)} · Roads: ${roads.length}`;
+    }
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY
+      };
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      startPt = getPos(e);
+      currentPt = startPt;
+      drawing = true;
+      render();
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!drawing) return;
+      currentPt = getPos(e);
+      render();
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+      if (!drawing) return;
+      const end = getPos(e);
+      const dist = Math.hypot(end.x - startPt.x, end.y - startPt.y);
+      if (dist > 8) insertRoad(startPt.x, startPt.y, end.x, end.y);
+      drawing = false;
+      startPt = null;
+      currentPt = null;
+      render();
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      if (drawing) { drawing = false; startPt = null; currentPt = null; render(); }
+    });
+
+    document.getElementById('reset').addEventListener('click', () => {
+      root = { x: 0, y: 0, w: canvas.width, h: canvas.height, depth: 0, children: null };
+      roads = [];
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Spatial Compiler</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: #0f1419;
+      color: #c9d1d9;
+      padding: 12px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    h1 { font-size: 13px; font-weight: 600; color: #3fb950; }
+    .main { display: grid; grid-template-columns: 1fr 200px; gap: 8px; }
+    canvas {
+      display: block;
+      width: 100%;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      background: #161b22;
+    }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    button {
+      background: #238636;
+      border: 1px solid #2ea043;
+      color: #fff;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+    }
+    button:hover { background: #2ea043; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .log {
+      flex: 1;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 6px;
+      font-size: 9px;
+      line-height: 1.5;
+      overflow-y: auto;
+      max-height: 220px;
+      color: #8b949e;
+    }
+    .log .tool { color: #58a6ff; }
+    .log .agent { color: #d2a8ff; }
+    .log .ok { color: #3fb950; }
+    .log .ts { color: #484f58; }
+    footer { margin-top: 6px; font-size: 10px; color: #6e7681; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agent Spatial Compiler — MCP Stream</h1>
+  </header>
+  <div class="main">
+    <canvas id="grid" width="340" height="280"></canvas>
+    <div class="panel">
+      <button id="streamBtn">Stream MCP Tool Call</button>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+  <footer>Simulates LLM → MCP Server → distributed spatial insert</footer>
+
+  <script>
+    const canvas = document.getElementById('grid');
+    const ctx = canvas.getContext('2d');
+    const logEl = document.getElementById('log');
+    const streamBtn = document.getElementById('streamBtn');
+    const GRID = 14;
+    const cellW = canvas.width / GRID;
+    const cellH = canvas.height / GRID;
+
+    const shapes = [];
+    let callIndex = 0;
+    let streaming = false;
+
+    const toolCalls = [
+      { fn: 'execute_insert', type: 'road', args: [2, 4, 11, 4], color: '#f0883e' },
+      { fn: 'execute_insert', type: 'road', args: [6, 2, 6, 11], color: '#f0883e' },
+      { fn: 'execute_insert', type: 'polygon', args: [9, 7, 12, 7, 12, 10, 9, 10], color: '#58a6ff' },
+      { fn: 'query_region', type: 'bbox', args: [1, 1, 13, 12], color: '#d2a8ff' },
+      { fn: 'execute_insert', type: 'road', args: [1, 8, 13, 8], color: '#f0883e' },
+      { fn: 'subdivide_cell', type: 'cell', args: [5, 5, 8, 8], color: '#3fb950' },
+      { fn: 'execute_insert', type: 'polygon', args: [2, 10, 5, 10, 4, 12, 2, 12], color: '#a371f7' },
+    ];
+
+    function gridToPx(gx, gy) {
+      return { x: gx * cellW + cellW / 2, y: gy * cellH + cellH / 2 };
+    }
+
+    function log(msg, cls = '') {
+      const line = document.createElement('div');
+      line.innerHTML = `<span class="ts">[${new Date().toISOString().slice(11, 23)}]</span> <span class="${cls}">${msg}</span>`;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function drawGrid() {
+      ctx.fillStyle = '#161b22';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#21262d';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= GRID; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * cellW, 0);
+        ctx.lineTo(i * cellW, canvas.height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i * cellH);
+        ctx.lineTo(canvas.width, i * cellH);
+        ctx.stroke();
+      }
+    }
+
+    function drawShapes() {
+      for (const s of shapes) {
+        ctx.globalAlpha = s.alpha ?? 1;
+        if (s.kind === 'road') {
+          const a = gridToPx(s.args[0], s.args[1]);
+          const b = gridToPx(s.args[2], s.args[3]);
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 4;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        } else if (s.kind === 'polygon') {
+          ctx.fillStyle = s.color + '44';
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          for (let i = 0; i < s.args.length; i += 2) {
+            const p = gridToPx(s.args[i], s.args[i + 1]);
+            i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (s.kind === 'bbox') {
+          const x = s.args[0] * cellW, y = s.args[1] * cellH;
+          const w = (s.args[2] - s.args[0]) * cellW;
+          const h = (s.args[3] - s.args[1]) * cellH;
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([]);
+        } else if (s.kind === 'cell') {
+          const x = s.args[0] * cellW, y = s.args[1] * cellH;
+          const w = (s.args[2] - s.args[0]) * cellW;
+          const h = (s.args[3] - s.args[1]) * cellH;
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1;
+          for (let d = 0; d < 3; d++) {
+            ctx.strokeRect(x + d * 2, y + d * 2, w - d * 4, h - d * 4);
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function render() {
+      drawGrid();
+      drawShapes();
+    }
+
+    function formatCall(call) {
+      const a = call.args.join(', ');
+      return `${call.fn}(${call.type}, ${a})`;
+    }
+
+    function delay(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+
+    async function streamNext() {
+      if (streaming) return;
+      streaming = true;
+      streamBtn.disabled = true;
+
+      const call = toolCalls[callIndex % toolCalls.length];
+      callIndex++;
+
+      log('agent: parsing Video ETL context…', 'agent');
+      await delay(400);
+      log('agent: planning spatial insertion', 'agent');
+      await delay(350);
+      log(`mcp → ${formatCall(call)}`, 'tool');
+      await delay(500);
+
+      if (call.fn === 'query_region') {
+        shapes.push({ kind: 'bbox', args: call.args, color: call.color, alpha: 0 });
+        let alpha = 0;
+        for (let i = 0; i <= 10; i++) {
+          alpha = i / 10;
+          shapes[shapes.length - 1].alpha = alpha;
+          render();
+          await delay(40);
+        }
+        log('← query_result: 3 features in region', 'ok');
+      } else if (call.fn === 'subdivide_cell') {
+        shapes.push({ kind: 'cell', args: call.args, color: call.color });
+        render();
+        log('← subdivide_cell: 4 child cells created', 'ok');
+      } else {
+        const shape = { kind: call.type, args: call.args, color: call.color, alpha: 0 };
+        shapes.push(shape);
+        for (let i = 0; i <= 12; i++) {
+          shape.alpha = i / 12;
+          render();
+          await delay(35);
+        }
+        log(`← insert_ok: ${call.type} compiled on node`, 'ok');
+      }
+
+      await delay(200);
+      streaming = false;
+      streamBtn.disabled = false;
+    }
+
+    streamBtn.addEventListener('click', streamNext);
+    log('mcp-server: listening on spatial://distributed-pm', 'ok');
+    render();
+  </script>
+</body>
+</html>

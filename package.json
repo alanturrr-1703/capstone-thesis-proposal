@@ -1,0 +1,14 @@
+{
+  "name": "thesis-pitch-slidev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "slidev --open",
+    "build": "slidev build",
+    "export": "slidev export"
+  },
+  "dependencies": {
+    "@slidev/cli": "^52.15.2",
+    "@slidev/theme-default": "latest"
+  }
+}
