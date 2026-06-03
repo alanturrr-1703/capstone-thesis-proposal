@@ -130,7 +130,7 @@ PR trees assume point data. PM trees subdivide cells **only where a polygon or l
 
 <div>
 
-<iframe :src="`${$slidev.nav.base}quadtree-demo.html`" width="100%" height="340px" frameborder="0" class="rounded-lg shadow-lg"></iframe>
+<DemoIframe demo="quadtree-demo.html" height="340px" />
 
 <div class="text-xs opacity-60 mt-1">Interactive: draw a road — watch recursive quadrant subdivision</div>
 
@@ -164,7 +164,7 @@ An **Agent migrates** to the node owning the target Place, executes PM subdivisi
 
 <div>
 
-<iframe :src="`${$slidev.nav.base}mass-division-demo.html`" width="100%" height="360px" frameborder="0" class="rounded-lg shadow-lg"></iframe>
+<DemoIframe demo="mass-division-demo.html" height="360px" />
 
 <div class="text-xs opacity-60 mt-1">Animated: init → thread spawn → agent migration → subdivide → finish</div>
 
@@ -198,7 +198,7 @@ The Model Context Protocol standardizes how the LLM discovers and invokes spatia
 
 <div>
 
-<iframe :src="`${$slidev.nav.base}mcp-demo.html`" width="100%" height="340px" frameborder="0" class="rounded-lg shadow-lg"></iframe>
+<DemoIframe demo="mcp-demo.html" height="340px" />
 
 <div class="text-xs opacity-60 mt-1">Interactive: stream simulated MCP tool calls onto the grid</div>
 
